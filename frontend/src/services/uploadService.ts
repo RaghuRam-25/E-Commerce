@@ -39,6 +39,57 @@ export const uploadMultipleImages = async (files: File[]): Promise<UploadResult[
   return res.data
 }
 
+export interface UploadProgressInfo {
+  loaded: number
+  total: number
+}
+
+/**
+ * Upload a single image file with granular progress reporting.
+ * Uses XMLHttpRequest so we can surface upload progress events per file.
+ */
+export const uploadSingleImageWithProgress = (
+  file: File,
+  onProgress?: (progress: UploadProgressInfo) => void
+): Promise<UploadResult> => {
+  return new Promise((resolve, reject) => {
+    const token = localStorage.getItem('bd_commerce_token')
+    const formData = new FormData()
+    formData.append('image', file)
+
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/upload/single`)
+
+    if (token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+    }
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) {
+        onProgress({ loaded: e.loaded, total: e.total })
+      }
+    }
+
+    xhr.onload = () => {
+      try {
+        const data = JSON.parse(xhr.responseText)
+        if (xhr.status >= 200 && xhr.status < 300 && data.success && data.data) {
+          resolve(data.data)
+        } else {
+          reject(new Error(data?.message || 'Upload failed.'))
+        }
+      } catch {
+        reject(new Error('Invalid server response.'))
+      }
+    }
+
+    xhr.onerror = () => reject(new Error('Network error during upload.'))
+    xhr.ontimeout = () => reject(new Error('Upload timed out.'))
+
+    xhr.send(formData)
+  })
+}
+
 /**
  * Delete image from Cloudinary by public_id
  */

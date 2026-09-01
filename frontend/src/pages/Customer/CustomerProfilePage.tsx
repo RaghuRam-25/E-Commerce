@@ -558,16 +558,17 @@ export const CustomerProfilePage: React.FC = () => {
           ) : (
             <div className="space-y-4">
               {filteredOrders.map((order) => {
-                const statusColor =
-                  order.status === 'delivered'
-                    ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                    : order.status === 'processing' || order.status === 'confirmed'
-                    ? 'bg-blue-100 text-blue-800 border-blue-200'
-                    : order.status === 'shipped'
-                    ? 'bg-purple-100 text-purple-800 border-purple-200'
-                    : order.status === 'cancelled'
-                    ? 'bg-rose-100 text-rose-800 border-rose-200'
-                    : 'bg-amber-100 text-amber-800 border-amber-200'
+                const statusColors: Record<string, string> = {
+                  delivered: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+                  shipped: 'bg-purple-100 text-purple-800 border-purple-200',
+                  out_for_delivery: 'bg-cyan-100 text-cyan-800 border-cyan-200',
+                  processing: 'bg-blue-100 text-blue-800 border-blue-200',
+                  confirmed: 'bg-blue-100 text-blue-800 border-blue-200',
+                  approved: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+                  cancelled: 'bg-rose-100 text-rose-800 border-rose-200',
+                  rejected: 'bg-rose-100 text-rose-800 border-rose-200',
+                }
+                const statusColor = statusColors[order.status] || 'bg-amber-100 text-amber-800 border-amber-200'
 
                 const displayAddress = order.shippingAddress
                   ? `${order.shippingAddress.addressLine}, ${order.shippingAddress.city}, ${order.shippingAddress.district || ''}`

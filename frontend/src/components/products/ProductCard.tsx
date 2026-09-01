@@ -2,6 +2,7 @@ import React from 'react'
 import { Link } from 'react-router-dom'
 import type { Product } from '@/types'
 import { useCart } from '@/contexts/CartContext'
+import { getProductPrimaryImage } from '@/services/productImages'
 
 interface ProductCardProps {
   product: Product
@@ -19,6 +20,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const finalPrice = hasDiscount
     ? product.price * (1 - product.discount / 100)
     : product.price
+  const primaryImage = getProductPrimaryImage(product)
 
   const handleAddToCart = (e: React.MouseEvent) => {
     e.preventDefault()
@@ -30,7 +32,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     <div className="group relative rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm hover:shadow-md transition-all duration-200 flex flex-col justify-between">
       <Link to={`/products/${product.id}`} className="block relative aspect-square bg-gray-50 overflow-hidden">
         <img
-          src={product.images?.[0] || 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=600&q=80'}
+          src={primaryImage || 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=600&q=80'}
           alt={product.name}
           className="object-cover w-full h-full group-hover:scale-105 transition-transform duration-300"
         />

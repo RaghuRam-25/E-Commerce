@@ -1,15 +1,87 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Types & Interfaces
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ReviewImage {
+  url: string
+  publicId: string
+}
+
+/** A product-specific review returned from the public API */
+export interface ProductReview {
+  id: string
+  customerId?: string
+  customerName: string
+  location?: string
+  avatarUrl?: string
+  title?: string
+  review?: string
+  rating: number
+  images: ReviewImage[]
+  isVerifiedPurchase: boolean
+  helpfulCount: number
+  hasVoted?: boolean
+  createdAt: string
+}
+
+/** Summary statistics for a product's reviews */
+export interface ReviewSummary {
+  averageRating: number
+  totalCount: number
+  distribution: { [star: number]: number }
+}
+
+/** Payload for submitting a new product review */
+export interface CreateProductReviewPayload {
+  productId: string
+  rating: number
+  title?: string
+  review?: string
+  images?: ReviewImage[]
+  orderId?: string
+  location?: string
+}
+
+/** Paginated response for product reviews */
+export interface ProductReviewsResponse {
+  success: boolean
+  total: number
+  page: number
+  pages: number
+  count: number
+  reviews: ProductReview[]
+}
+
+export interface ReviewQueryParams {
+  page?: number
+  limit?: number
+  rating?: string
+  withPhotos?: boolean
+  sort?: 'recent' | 'highest' | 'lowest' | 'helpful'
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Legacy interfaces (kept for backwards compatibility with ReviewsPage & Admin)
+// ─────────────────────────────────────────────────────────────────────────────
+
 export interface Review {
   id: string
   customerId?: string
   customerName: string
   location?: string
   email?: string
+  title?: string
   review: string
   rating: number
   avatarUrl?: string
+  images?: ReviewImage[]
   status: 'pending' | 'approved' | 'rejected'
   isFeatured: boolean
   isVerifiedPurchase?: boolean
+  helpfulCount?: number
+  productId?: string
+  productName?: string
+  productImage?: string
   createdAt: string
   updatedAt?: string
 }
@@ -31,79 +103,149 @@ export interface CreateReviewPayload {
   orderId?: string
 }
 
-const API_BASE = '/api/reviews'
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
 
-const INITIAL_FALLBACK_REVIEWS: Review[] = [
-  {
-    id: 'rev-1',
-    customerName: 'Ayesha Khan',
-    location: 'Dhaka, Bangladesh',
-    review: 'Excellent service and fast delivery! The quality of the cotton shirt exceeded my expectations.',
-    rating: 5,
-    status: 'approved',
-    isFeatured: true,
-    isVerifiedPurchase: true,
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 5).toISOString(),
-  },
-  {
-    id: 'rev-2',
-    customerName: 'Rahman Islam',
-    location: 'Chittagong, Bangladesh',
-    review: 'Great variety of products and very responsive customer support. Cash on delivery was seamless.',
-    rating: 5,
-    status: 'approved',
-    isFeatured: true,
-    isVerifiedPurchase: true,
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 10).toISOString(),
-  },
-  {
-    id: 'rev-3',
-    customerName: 'Fatima Ahmed',
-    location: 'Sylhet, Bangladesh',
-    review: 'Love the quality and packaging. Everything arrived in perfect condition within 2 days.',
-    rating: 5,
-    status: 'approved',
-    isFeatured: true,
-    isVerifiedPurchase: true,
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 15).toISOString(),
-  },
-  {
-    id: 'rev-4',
-    customerName: 'Tanvir Hossain',
-    location: 'Rajshahi, Bangladesh',
-    review: 'Very smooth shopping experience and quick response on WhatsApp hotline.',
-    rating: 4,
-    status: 'pending',
-    isFeatured: false,
-    isVerifiedPurchase: false,
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 3).toISOString(),
-  },
-]
+const API_BASE = '/api'
+const REVIEWS_BASE = `${API_BASE}/reviews`
 
-const getLocalReviews = (): Review[] => {
-  try {
-    const stored = localStorage.getItem('bd_commerce_reviews')
-    if (stored) return JSON.parse(stored)
-  } catch (e) {
-    console.error('Failed to load reviews from localStorage', e)
-  }
-  return INITIAL_FALLBACK_REVIEWS
+const getToken = (): string | null => localStorage.getItem('bd_commerce_token')
+
+const authHeaders = (): Record<string, string> => {
+  const token = getToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-const saveLocalReviews = (reviews: Review[]) => {
+// ─────────────────────────────────────────────────────────────────────────────
+// Product-specific review functions (new)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Fetch paginated, filtered, sorted reviews for a specific product.
+ * GET /api/products/:productId/reviews
+ */
+export async function getProductReviews(
+  productId: string,
+  params: ReviewQueryParams = {}
+): Promise<ProductReviewsResponse> {
+  const query = new URLSearchParams()
+  if (params.page) query.set('page', String(params.page))
+  if (params.limit) query.set('limit', String(params.limit))
+  if (params.rating && params.rating !== 'all') query.set('rating', params.rating)
+  if (params.withPhotos) query.set('withPhotos', 'true')
+  if (params.sort) query.set('sort', params.sort)
+
+  const res = await fetch(`${API_BASE}/products/${productId}/reviews?${query.toString()}`)
+  const data = await res.json()
+
+  if (!res.ok) {
+    throw new Error(data.message || 'Failed to fetch reviews.')
+  }
+
+  return data
+}
+
+/**
+ * Fetch rating summary (avg, total, distribution) for a specific product.
+ * GET /api/products/:productId/review-summary
+ */
+export async function getProductReviewSummary(productId: string): Promise<ReviewSummary> {
+  const res = await fetch(`${API_BASE}/products/${productId}/review-summary`)
+  const data = await res.json()
+
+  if (!res.ok) {
+    throw new Error(data.message || 'Failed to fetch review summary.')
+  }
+
+  return data.summary as ReviewSummary
+}
+
+/**
+ * Submit a new product review (text, photos, or both).
+ * POST /api/reviews
+ */
+export async function createProductReview(
+  payload: CreateProductReviewPayload
+): Promise<{ success: boolean; message: string; review?: ProductReview }> {
+  // Client-side validation
+  const hasText = payload.review && payload.review.trim().length >= 10
+  const hasImages = payload.images && payload.images.length > 0
+
+  if (!hasText && !hasImages) {
+    return {
+      success: false,
+      message: 'Please provide a review text (min 10 characters) or at least one photo.',
+    }
+  }
+  if (payload.review && payload.review.trim().length > 1000) {
+    return { success: false, message: 'Review text cannot exceed 1000 characters.' }
+  }
+  if (!payload.rating || payload.rating < 1 || payload.rating > 5) {
+    return { success: false, message: 'Rating must be between 1 and 5.' }
+  }
+  if (payload.images && payload.images.length > 5) {
+    return { success: false, message: 'You can upload a maximum of 5 photos per review.' }
+  }
+
   try {
-    localStorage.setItem('bd_commerce_reviews', JSON.stringify(reviews))
-  } catch (e) {
-    console.error('Failed to save reviews to localStorage', e)
+    const res = await fetch(REVIEWS_BASE, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders(),
+      },
+      body: JSON.stringify(payload),
+    })
+
+    const data = await res.json()
+
+    if (res.ok && data.success) {
+      return {
+        success: true,
+        message: data.message || 'Thank you! Your review is pending approval.',
+        review: data.review,
+      }
+    }
+
+    return { success: false, message: data.message || 'Failed to submit review.' }
+  } catch (err) {
+    return { success: false, message: 'Network error. Please check your connection and try again.' }
   }
 }
+
+/**
+ * Mark a review as helpful. Backend prevents duplicate votes.
+ * POST /api/reviews/:id/helpful
+ */
+export async function markReviewHelpful(reviewId: string): Promise<{ success: boolean; message: string; helpfulCount?: number }> {
+  try {
+    const res = await fetch(`${REVIEWS_BASE}/${reviewId}/helpful`, {
+      method: 'POST',
+      headers: { ...authHeaders() },
+    })
+
+    const data = await res.json()
+    return {
+      success: data.success,
+      message: data.message || '',
+      helpfulCount: data.helpfulCount,
+    }
+  } catch (err) {
+    return { success: false, message: 'Failed to record your vote.' }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Legacy / Store-wide review functions (kept for ReviewsPage & AdminReviewsPage)
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * Fetch public approved & featured reviews (for Homepage)
  */
 export async function getFeaturedReviews(): Promise<Review[]> {
   try {
-    const res = await fetch(`${API_BASE}/featured`)
+    const res = await fetch(`${REVIEWS_BASE}/featured`)
     if (res.ok) {
       const data = await res.json()
       if (data.success && Array.isArray(data.reviews)) {
@@ -111,19 +253,17 @@ export async function getFeaturedReviews(): Promise<Review[]> {
       }
     }
   } catch (err) {
-    // API offline fallback
+    // API offline
   }
-
-  const list = getLocalReviews()
-  return list.filter((r) => r.status === 'approved' && r.isFeatured)
+  return []
 }
 
 /**
- * Fetch all public approved reviews
+ * Fetch all public approved reviews (for Reviews page)
  */
 export async function getApprovedReviews(): Promise<Review[]> {
   try {
-    const res = await fetch(API_BASE)
+    const res = await fetch(REVIEWS_BASE)
     if (res.ok) {
       const data = await res.json()
       if (data.success && Array.isArray(data.reviews)) {
@@ -131,37 +271,33 @@ export async function getApprovedReviews(): Promise<Review[]> {
       }
     }
   } catch (err) {
-    // API offline fallback
+    // API offline
   }
-
-  const list = getLocalReviews()
-  return list.filter((r) => r.status === 'approved')
+  return []
 }
 
 /**
- * Submit a customer review (Authenticated)
+ * Submit a store/general review (used by ReviewsPage — legacy)
  */
 export async function createReview(
   payload: CreateReviewPayload
 ): Promise<{ success: boolean; message: string; review?: Review }> {
-  // Client-side validation
   if (!payload.review || payload.review.trim().length < 10) {
     return { success: false, message: 'Review text must be at least 10 characters long.' }
   }
-  if (payload.review.trim().length > 500) {
-    return { success: false, message: 'Review text cannot exceed 500 characters.' }
+  if (payload.review.trim().length > 1000) {
+    return { success: false, message: 'Review text cannot exceed 1000 characters.' }
   }
   if (!payload.rating || payload.rating < 1 || payload.rating > 5) {
     return { success: false, message: 'Rating must be an integer between 1 and 5.' }
   }
 
   try {
-    const token = localStorage.getItem('token')
-    const res = await fetch(API_BASE, {
+    const res = await fetch(REVIEWS_BASE, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: token ? `Bearer ${token}` : '',
+        ...authHeaders(),
       },
       body: JSON.stringify(payload),
     })
@@ -173,49 +309,10 @@ export async function createReview(
         message: data.message || 'Thank you! Your review has been submitted for approval.',
         review: data.review,
       }
-    } else {
-      return {
-        success: false,
-        message: data.message || 'Failed to submit review.',
-      }
     }
+    return { success: false, message: data.message || 'Failed to submit review.' }
   } catch (err) {
-    // API offline fallback
-    const list = getLocalReviews()
-    
-    // Get user from localStorage
-    let userName = 'Valued Customer'
-    let userEmail = undefined
-    try {
-      const u = localStorage.getItem('bd_commerce_user')
-      if (u) {
-        const parsed = JSON.parse(u)
-        if (parsed.name) userName = parsed.name
-        if (parsed.email) userEmail = parsed.email
-      }
-    } catch (e) {}
-
-    const newReview: Review = {
-      id: 'rev-' + Math.random().toString(36).substring(2, 9),
-      customerName: userName,
-      location: payload.location || 'Dhaka, Bangladesh',
-      email: userEmail,
-      review: payload.review.trim(),
-      rating: payload.rating,
-      status: 'pending',
-      isFeatured: false,
-      isVerifiedPurchase: true,
-      createdAt: new Date().toISOString(),
-    }
-
-    list.unshift(newReview)
-    saveLocalReviews(list)
-
-    return {
-      success: true,
-      message: 'Thank you! Your review has been submitted and is pending administrator approval.',
-      review: newReview,
-    }
+    return { success: false, message: 'Network error. Please try again.' }
   }
 }
 
@@ -228,16 +325,13 @@ export async function getAllReviewsAdmin(
   search?: string
 ): Promise<Review[]> {
   try {
-    const token = localStorage.getItem('token')
     const queryParams = new URLSearchParams()
     if (status) queryParams.append('status', status)
     if (rating) queryParams.append('rating', rating)
     if (search) queryParams.append('search', search)
 
-    const res = await fetch(`${API_BASE}/admin/all?${queryParams.toString()}`, {
-      headers: {
-        Authorization: token ? `Bearer ${token}` : '',
-      },
+    const res = await fetch(`${REVIEWS_BASE}/admin/all?${queryParams.toString()}`, {
+      headers: { ...authHeaders() },
     })
     if (res.ok) {
       const data = await res.json()
@@ -246,26 +340,9 @@ export async function getAllReviewsAdmin(
       }
     }
   } catch (err) {
-    // API offline fallback
+    // API offline
   }
-
-  let list = getLocalReviews()
-  if (status && status !== 'all') {
-    list = list.filter((r) => r.status === status)
-  }
-  if (rating && rating !== 'all') {
-    list = list.filter((r) => r.rating === Number(rating))
-  }
-  if (search) {
-    const q = search.trim().toLowerCase()
-    list = list.filter(
-      (r) =>
-        r.customerName.toLowerCase().includes(q) ||
-        r.review.toLowerCase().includes(q) ||
-        (r.location && r.location.toLowerCase().includes(q))
-    )
-  }
-  return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+  return []
 }
 
 /**
@@ -273,11 +350,8 @@ export async function getAllReviewsAdmin(
  */
 export async function getReviewStatsAdmin(): Promise<ReviewStats> {
   try {
-    const token = localStorage.getItem('token')
-    const res = await fetch(`${API_BASE}/admin/stats`, {
-      headers: {
-        Authorization: token ? `Bearer ${token}` : '',
-      },
+    const res = await fetch(`${REVIEWS_BASE}/admin/stats`, {
+      headers: { ...authHeaders() },
     })
     if (res.ok) {
       const data = await res.json()
@@ -286,144 +360,90 @@ export async function getReviewStatsAdmin(): Promise<ReviewStats> {
       }
     }
   } catch (err) {
-    // API offline fallback
+    // API offline
   }
-
-  const list = getLocalReviews()
-  const total = list.length
-  const pending = list.filter((r) => r.status === 'pending').length
-  const approved = list.filter((r) => r.status === 'approved').length
-  const rejected = list.filter((r) => r.status === 'rejected').length
-  const featuredCount = list.filter((r) => r.status === 'approved' && r.isFeatured).length
-  const approvedList = list.filter((r) => r.status === 'approved')
-  const sumRating = approvedList.reduce((acc, curr) => acc + curr.rating, 0)
-  const averageRating = approvedList.length > 0 ? Number((sumRating / approvedList.length).toFixed(1)) : 5.0
-
-  return { total, pending, approved, rejected, averageRating, featuredCount }
+  return { total: 0, pending: 0, approved: 0, rejected: 0, averageRating: 5.0, featuredCount: 0 }
 }
 
 /**
- * Approve Review
+ * Approve a review
  */
 export async function approveReview(id: string): Promise<boolean> {
   try {
-    const token = localStorage.getItem('token')
-    const res = await fetch(`${API_BASE}/${id}/approve`, {
+    const res = await fetch(`${REVIEWS_BASE}/${id}/approve`, {
       method: 'PATCH',
-      headers: { Authorization: token ? `Bearer ${token}` : '' },
+      headers: { ...authHeaders() },
     })
-    if (res.ok) return true
-  } catch (err) {}
-
-  const list = getLocalReviews()
-  const target = list.find((r) => r.id === id)
-  if (target) {
-    target.status = 'approved'
-    saveLocalReviews(list)
-    return true
+    return res.ok
+  } catch (err) {
+    return false
   }
-  return false
 }
 
 /**
- * Reject Review
+ * Reject a review
  */
 export async function rejectReview(id: string): Promise<boolean> {
   try {
-    const token = localStorage.getItem('token')
-    const res = await fetch(`${API_BASE}/${id}/reject`, {
+    const res = await fetch(`${REVIEWS_BASE}/${id}/reject`, {
       method: 'PATCH',
-      headers: { Authorization: token ? `Bearer ${token}` : '' },
+      headers: { ...authHeaders() },
     })
-    if (res.ok) return true
-  } catch (err) {}
-
-  const list = getLocalReviews()
-  const target = list.find((r) => r.id === id)
-  if (target) {
-    target.status = 'rejected'
-    target.isFeatured = false
-    saveLocalReviews(list)
-    return true
+    return res.ok
+  } catch (err) {
+    return false
   }
-  return false
 }
 
 /**
- * Toggle Featured Status
+ * Toggle featured status
  */
 export async function toggleFeaturedReview(id: string, isFeatured?: boolean): Promise<boolean> {
   try {
-    const token = localStorage.getItem('token')
-    const res = await fetch(`${API_BASE}/${id}/featured`, {
+    const res = await fetch(`${REVIEWS_BASE}/${id}/featured`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: token ? `Bearer ${token}` : '',
+        ...authHeaders(),
       },
       body: JSON.stringify({ isFeatured }),
     })
-    if (res.ok) return true
-  } catch (err) {}
-
-  const list = getLocalReviews()
-  const target = list.find((r) => r.id === id)
-  if (target) {
-    target.isFeatured = typeof isFeatured === 'boolean' ? isFeatured : !target.isFeatured
-    if (target.isFeatured && target.status !== 'approved') {
-      target.status = 'approved'
-    }
-    saveLocalReviews(list)
-    return true
+    return res.ok
+  } catch (err) {
+    return false
   }
-  return false
 }
 
 /**
- * Delete Review
+ * Delete a review
  */
 export async function deleteReview(id: string): Promise<boolean> {
   try {
-    const token = localStorage.getItem('token')
-    const res = await fetch(`${API_BASE}/${id}`, {
+    const res = await fetch(`${REVIEWS_BASE}/${id}`, {
       method: 'DELETE',
-      headers: { Authorization: token ? `Bearer ${token}` : '' },
+      headers: { ...authHeaders() },
     })
-    if (res.ok) return true
-  } catch (err) {}
-
-  const list = getLocalReviews()
-  const updated = list.filter((r) => r.id !== id)
-  saveLocalReviews(updated)
-  return true
+    return res.ok
+  } catch (err) {
+    return false
+  }
 }
 
 /**
- * Update Review (Admin)
+ * Update a review (Admin)
  */
-export async function updateReviewAdmin(
-  id: string,
-  payload: Partial<Review>
-): Promise<boolean> {
+export async function updateReviewAdmin(id: string, payload: Partial<Review>): Promise<boolean> {
   try {
-    const token = localStorage.getItem('token')
-    const res = await fetch(`${API_BASE}/${id}`, {
+    const res = await fetch(`${REVIEWS_BASE}/${id}`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: token ? `Bearer ${token}` : '',
+        ...authHeaders(),
       },
       body: JSON.stringify(payload),
     })
-    if (res.ok) return true
-  } catch (err) {}
-
-  const list = getLocalReviews()
-  const target = list.find((r) => r.id === id)
-  if (target) {
-    Object.assign(target, payload, { updatedAt: new Date().toISOString() })
-    saveLocalReviews(list)
-    return true
+    return res.ok
+  } catch (err) {
+    return false
   }
-  return false
 }

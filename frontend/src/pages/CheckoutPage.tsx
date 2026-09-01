@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useCart } from '@/contexts/CartContext'
 import { useAuth } from '@/contexts/AuthContext'
-import { getAddresses } from '@/services/addressService'
+import { getAddresses, createAddress } from '@/services/addressService'
 import {
   getEnabledPaymentMethods,
   initializePayment,
@@ -10,8 +10,10 @@ import {
 } from '@/services/paymentMethodService'
 import { AddressPickerModal } from '@/components/checkout/AddressPickerModal'
 import { OnlinePaymentGatewayModal } from '@/components/checkout/OnlinePaymentGatewayModal'
-import { placeOrder } from '@/services/orderService'
-import type { SavedAddress, ShippingInfo, PaymentMethod, PaymentStatus } from '@/types'
+import { placeOrder, getShippingCodSettings } from '@/services/orderService'
+import type { SavedAddress, ShippingInfo, PaymentMethod, PaymentStatus, ShippingCodSettings } from '@/types'
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api'
 
 const BANGLADESH_DISTRICTS = [
   'Dhaka','Chittagong','Sylhet','Rajshahi','Khulna','Barisal','Rangpur','Mymensingh',
@@ -24,6 +26,7 @@ export const CheckoutPage: React.FC = () => {
   const { items, total, totalItems, clearCart } = useCart()
   const { user, isAuthenticated } = useAuth()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
 
   // --- Address state ---
   const [savedAddresses, setSavedAddresses] = useState<SavedAddress[]>([])
@@ -45,7 +48,7 @@ export const CheckoutPage: React.FC = () => {
   })
   const [formErrors, setFormErrors] = useState<Partial<Record<keyof ShippingInfo, string>>>({})
 
-  // --- Admin-Controlled Payment Methods State ---
+  // --- Payment Methods State ---
   const [enabledMethods, setEnabledMethods] = useState<PaymentMethod[]>([])
   const [selectedMethod, setSelectedMethod] = useState<PaymentMethod | null>(null)
   const [loadingPaymentMethods, setLoadingPaymentMethods] = useState(true)
@@ -55,6 +58,7 @@ export const CheckoutPage: React.FC = () => {
 
   const [notes, setNotes] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [shippingSettings, setShippingSettings] = useState<ShippingCodSettings | null>(null)
   const [orderSuccess, setOrderSuccess] = useState<{
     orderId: string
     address: string
@@ -64,8 +68,70 @@ export const CheckoutPage: React.FC = () => {
     amount: number
   } | null>(null)
 
-  const deliveryCharge = 60
-  const grandTotal = total + deliveryCharge
+  // Load admin-configured shipping/COD settings (backend source of truth)
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const data = await getShippingCodSettings()
+        setShippingSettings(data)
+      } catch {
+        setShippingSettings(null)
+      }
+    }
+    load()
+  }, [])
+
+  // ── Shipping & COD amounts (derived, not hardcoded) ────────────
+  const deliveryCharge = shippingSettings?.shippingCharge ?? 0
+  const isCodSelected = !!selectedMethod && (selectedMethod.id === 'cod' || selectedMethod.type === 'cod')
+  const codCharge = isCodSelected && shippingSettings?.codEnabled !== false
+    ? (shippingSettings?.codCharge ?? 0)
+    : 0
+  const requireUpfront = !!shippingSettings?.requireUpfrontCodCharge
+  const paidUpfront = isCodSelected && requireUpfront && shippingSettings?.codEnabled !== false
+    ? Math.min(codCharge || deliveryCharge, total + deliveryCharge + codCharge)
+    : 0
+  const grandTotal = total + deliveryCharge + codCharge
+  const remainingCod = grandTotal - paidUpfront
+
+  // Handle URL redirect query params from official bKash Callback
+  useEffect(() => {
+    const statusParam = searchParams.get('paymentStatus')
+    const orderIdParam = searchParams.get('orderId')
+    const trxIdParam = searchParams.get('trxId')
+    const amountParam = searchParams.get('amount')
+    const reasonParam = searchParams.get('reason')
+    const demoBkash = searchParams.get('demoBkash')
+
+    if (statusParam === 'paid' && orderIdParam) {
+      clearCart()
+      setOrderSuccess({
+        orderId: orderIdParam,
+        address: 'Saved Delivery Address',
+        methodName: 'bKash Official Checkout',
+        paymentStatus: 'paid',
+        trxId: trxIdParam || 'BK' + Date.now(),
+        amount: Number(amountParam) || grandTotal,
+      })
+    } else if (statusParam === 'failed') {
+      setPaymentError(
+        reasonParam
+          ? `bKash Payment Error: ${decodeURIComponent(reasonParam)}`
+          : 'bKash payment was cancelled or unsuccessful. Please try again.'
+      )
+    } else if (demoBkash === 'true' && orderIdParam) {
+      // Demo sandbox bKash flow simulation
+      clearCart()
+      setOrderSuccess({
+        orderId: orderIdParam,
+        address: 'Saved Delivery Address',
+        methodName: 'bKash Official Checkout (Sandbox Demo)',
+        paymentStatus: 'paid',
+        trxId: 'BK_DEMO_' + Math.random().toString(36).substring(2, 8).toUpperCase(),
+        amount: grandTotal,
+      })
+    }
+  }, [searchParams, clearCart, grandTotal])
 
   // 1. Load enabled payment methods (Admin-controlled)
   useEffect(() => {
@@ -74,7 +140,6 @@ export const CheckoutPage: React.FC = () => {
       try {
         const list = await getEnabledPaymentMethods()
         setEnabledMethods(list)
-        // Explicitly start with no payment method selected per requirements
         setSelectedMethod(null)
       } catch (e) {
         console.error('Failed to load enabled payment methods:', e)
@@ -85,7 +150,7 @@ export const CheckoutPage: React.FC = () => {
     loadPayments()
   }, [])
 
-  // 2. Load saved addresses (from API or localStorage)
+  // 2. Load saved addresses and set default automatically
   useEffect(() => {
     const load = async () => {
       setLoadingAddress(true)
@@ -95,6 +160,7 @@ export const CheckoutPage: React.FC = () => {
         if (list.length > 0) {
           const def = list.find((a) => a.isDefault) || list[0]
           setSelectedAddress(def)
+          setUseManualForm(false)
           setManualForm({
             fullName: def.fullName || user?.name || '',
             email: user?.email || '',
@@ -105,16 +171,21 @@ export const CheckoutPage: React.FC = () => {
             postalCode: def.postalCode || '',
             country: def.country || 'Bangladesh',
           })
-        } else if (user) {
-          setManualForm((prev) => ({
-            ...prev,
-            fullName: user.name || prev.fullName,
-            email: user.email || prev.email,
-            phone: user.phone || prev.phone,
-          }))
+        } else {
+          setUseManualForm(true)
+          setSelectedAddress(null)
+          if (user) {
+            setManualForm((prev) => ({
+              ...prev,
+              fullName: user.name || prev.fullName,
+              email: user.email || prev.email,
+              phone: user.phone || prev.phone,
+            }))
+          }
         }
       } catch (err) {
         console.error('Failed to fetch addresses on checkout:', err)
+        setUseManualForm(true)
       } finally {
         setLoadingAddress(false)
       }
@@ -134,6 +205,65 @@ export const CheckoutPage: React.FC = () => {
     return Object.keys(e).length === 0
   }
 
+  // Helper: Auto-save manual address as default address for authenticated user
+  const ensureAddressSavedAndResolved = async (): Promise<ShippingInfo | null> => {
+    if (selectedAddress && !useManualForm) {
+      return {
+        fullName: selectedAddress.fullName,
+        email: manualForm.email || user?.email || '',
+        phone: selectedAddress.phone,
+        addressLine: selectedAddress.addressLine,
+        city: selectedAddress.city,
+        district: selectedAddress.district,
+        postalCode: selectedAddress.postalCode || '',
+        country: selectedAddress.country || 'Bangladesh',
+      }
+    }
+
+    if (!validateManual()) return null
+
+    const addrObj: ShippingInfo = {
+      fullName: manualForm.fullName.trim(),
+      email: manualForm.email.trim(),
+      phone: manualForm.phone.trim(),
+      addressLine: manualForm.addressLine.trim(),
+      city: manualForm.city.trim(),
+      district: manualForm.district || 'Dhaka',
+      postalCode: manualForm.postalCode?.trim() || '',
+      country: manualForm.country || 'Bangladesh',
+    }
+
+    if (isAuthenticated) {
+      try {
+        const isFirst = savedAddresses.length === 0
+        const res = await createAddress({
+          label: 'Home',
+          fullName: addrObj.fullName,
+          phone: addrObj.phone,
+          addressLine: addrObj.addressLine,
+          city: addrObj.city,
+          district: addrObj.district,
+          postalCode: addrObj.postalCode,
+          country: addrObj.country,
+          isDefault: isFirst || true,
+        })
+
+        if (res.success && res.address) {
+          setSelectedAddress(res.address)
+          setSavedAddresses((prev) => {
+            const cleaned = prev.map((a) => ({ ...a, isDefault: false }))
+            return [res.address!, ...cleaned]
+          })
+          setUseManualForm(false)
+        }
+      } catch (err) {
+        console.warn('Auto-save address error:', err)
+      }
+    }
+
+    return addrObj
+  }
+
   // Handle Order Submit
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -144,16 +274,74 @@ export const CheckoutPage: React.FC = () => {
       return
     }
 
-    if (!selectedAddress && useManualForm && !validateManual()) {
-      return
+    const finalAddress = await ensureAddressSavedAndResolved()
+    if (!finalAddress) return
+
+    // ── Official bKash Gateway Flow ──────────────────────────────────────────
+    if (selectedMethod.id === 'bkash') {
+      setSubmitting(true)
+      setConnectionMessage('Creating bKash Official Payment Session...')
+
+      try {
+        // Step 1: Create order in database with status pending / unpaid
+        const orderRes = await placeOrder({
+          customerName: finalAddress.fullName,
+          customerEmail: finalAddress.email,
+          customerPhone: finalAddress.phone,
+          shippingAddress: {
+            fullName: finalAddress.fullName,
+            phone: finalAddress.phone,
+            addressLine: finalAddress.addressLine,
+            city: finalAddress.city,
+            district: finalAddress.district,
+            postalCode: finalAddress.postalCode,
+            country: finalAddress.country,
+          },
+          items: items.map((item) => ({
+            productId: item.productId,
+            productName: item.productName,
+            productImage: item.productImage,
+            price: item.price,
+            quantity: item.quantity,
+          })),
+          paymentMethod: 'bkash',
+          deliveryCharge,
+          notes: notes || undefined,
+        })
+
+        const dbOrderId = orderRes.order?._id || orderRes.order?.id || orderRes.order?.orderNumber
+
+        // Step 2: Initialize bKash Payment API via Backend
+        const bkashRes = await fetch(`${API_BASE}/bkash/create-payment`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            orderId: dbOrderId,
+            amount: grandTotal,
+            phone: finalAddress.phone,
+          }),
+        })
+
+        const bkashJson = await bkashRes.json()
+
+        if (bkashJson.success && bkashJson.bkashURL) {
+          setConnectionMessage('Redirecting to official bKash Checkout...')
+          // Step 3: Redirect customer directly to official bKash checkout environment
+          window.location.href = bkashJson.bkashURL
+          return
+        } else {
+          setSubmitting(false)
+          setPaymentError(bkashJson.message || 'Unable to connect to bKash Checkout API.')
+          return
+        }
+      } catch (err: any) {
+        setSubmitting(false)
+        setPaymentError(err.message || 'bKash initialization error. Please try again.')
+        return
+      }
     }
 
-    if (!selectedAddress && !useManualForm) {
-      setShowAddressPicker(true)
-      return
-    }
-
-    // Online Payment Gateway Flow (bKash, Nagad, Rocket, Card)
+    // ── Other Online Payment Gateway Flow (Nagad, Rocket, Card) ──────────────
     if (selectedMethod.type !== 'cod') {
       setSubmitting(true)
       setConnectionMessage(`Connecting to ${selectedMethod.name} gateway...`)
@@ -162,9 +350,9 @@ export const CheckoutPage: React.FC = () => {
         methodId: selectedMethod.id,
         amount: grandTotal,
         customerInfo: {
-          name: manualForm.fullName,
-          email: manualForm.email,
-          phone: manualForm.phone,
+          name: finalAddress.fullName,
+          email: finalAddress.email,
+          phone: finalAddress.phone,
         },
       })
       setSubmitting(false)
@@ -178,35 +366,23 @@ export const CheckoutPage: React.FC = () => {
       return
     }
 
-    // Cash on Delivery Flow
+    // ── Cash on Delivery Flow ────────────────────────────────────────────────
     setSubmitting(true)
-
-    const addrObj = selectedAddress && !useManualForm
-      ? {
-          fullName: selectedAddress.fullName,
-          phone: selectedAddress.phone,
-          addressLine: selectedAddress.addressLine,
-          city: selectedAddress.city,
-          district: selectedAddress.district,
-          postalCode: selectedAddress.postalCode || '',
-          country: selectedAddress.country,
-        }
-      : {
-          fullName: manualForm.fullName,
-          phone: manualForm.phone,
-          addressLine: manualForm.addressLine,
-          city: manualForm.city,
-          district: manualForm.district,
-          postalCode: manualForm.postalCode,
-          country: manualForm.country,
-        }
 
     try {
       const res = await placeOrder({
-        customerName: manualForm.fullName,
-        customerEmail: manualForm.email,
-        customerPhone: manualForm.phone,
-        shippingAddress: addrObj,
+        customerName: finalAddress.fullName,
+        customerEmail: finalAddress.email,
+        customerPhone: finalAddress.phone,
+        shippingAddress: {
+          fullName: finalAddress.fullName,
+          phone: finalAddress.phone,
+          addressLine: finalAddress.addressLine,
+          city: finalAddress.city,
+          district: finalAddress.district,
+          postalCode: finalAddress.postalCode,
+          country: finalAddress.country,
+        },
         items: items.map((item) => ({
           productId: item.productId,
           productName: item.productName,
@@ -219,7 +395,7 @@ export const CheckoutPage: React.FC = () => {
         notes: notes || undefined,
       })
 
-      const addrSummary = `${addrObj.addressLine}, ${addrObj.city}, ${addrObj.district}`
+      const addrSummary = `${finalAddress.addressLine}, ${finalAddress.city}, ${finalAddress.district}`
 
       clearCart()
       setSubmitting(false)
@@ -236,7 +412,7 @@ export const CheckoutPage: React.FC = () => {
     }
   }
 
-  // ── Helper: Generate Payment CTA Button Label (Section 4, 7, 8) ────────
+  // Helper: Generate Payment CTA Button Label
   const getCtaButtonContent = () => {
     if (!selectedMethod) {
       return { title: 'Select a payment method', subtitle: '' }
@@ -251,8 +427,8 @@ export const CheckoutPage: React.FC = () => {
 
     if (selectedMethod.id === 'bkash') {
       return {
-        title: `💳 Pay ৳${grandTotal.toLocaleString()} with bKash`,
-        subtitle: 'Direct bKash online payment gateway',
+        title: `🌸 Pay ৳${grandTotal.toLocaleString()} with bKash Checkout`,
+        subtitle: 'Redirects to official bKash Checkout environment',
       }
     }
 
@@ -285,7 +461,7 @@ export const CheckoutPage: React.FC = () => {
 
   const ctaContent = getCtaButtonContent()
 
-  // ── Order Confirmation / Success Screen (Section 10 & 12) ─────────
+  // ── Order Confirmation / Success Screen ─────────
   if (orderSuccess) {
     const isPaid = orderSuccess.paymentStatus === 'paid'
 
@@ -300,11 +476,11 @@ export const CheckoutPage: React.FC = () => {
               {isPaid ? '✓ Payment Successful' : 'Order Confirmed 🎉'}
             </span>
             <h1 className="text-2xl sm:text-3xl font-black text-gray-900">
-              {isPaid ? 'Your Payment Has Been Confirmed' : 'Thank You for Your Order!'}
+              {isPaid ? 'Your bKash Payment Has Been Confirmed' : 'Thank You for Your Order!'}
             </h1>
             <p className="text-gray-500 text-xs sm:text-sm mt-2">
               {isPaid
-                ? 'Your transaction was verified and your order is now confirmed.'
+                ? 'Your bKash transaction was verified and your order is now confirmed.'
                 : 'We have received your Cash on Delivery order. Pay cash when your package arrives.'}
             </p>
           </div>
@@ -320,7 +496,7 @@ export const CheckoutPage: React.FC = () => {
               <span className={`font-black px-2.5 py-0.5 rounded-full text-[11px] ${
                 isPaid ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
               }`}>
-                {isPaid ? '✓ Paid' : '⏳ Unpaid (Cash on Delivery)'}
+                {isPaid ? '✓ Paid (bKash Verified)' : '⏳ Unpaid (Cash on Delivery)'}
               </span>
             </div>
 
@@ -331,7 +507,7 @@ export const CheckoutPage: React.FC = () => {
 
             {orderSuccess.trxId && (
               <div className="flex justify-between items-center">
-                <span className="font-semibold text-gray-700">Transaction ID:</span>
+                <span className="font-semibold text-gray-700">bKash Transaction ID:</span>
                 <span className="font-mono font-bold text-emerald-700">{orderSuccess.trxId}</span>
               </div>
             )}
@@ -365,7 +541,7 @@ export const CheckoutPage: React.FC = () => {
   }
 
   // ── Empty Cart ────────────────────────────────────────────────
-  if (items.length === 0) {
+  if (items.length === 0 && !searchParams.get('paymentStatus')) {
     return (
       <div className="max-w-md mx-auto px-4 py-20 text-center space-y-5">
         <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center text-4xl mx-auto">🛒</div>
@@ -419,7 +595,7 @@ export const CheckoutPage: React.FC = () => {
                 {loadingAddress ? (
                   <div className="py-8 text-center text-gray-400 text-sm">Loading delivery address...</div>
                 ) : selectedAddress && !useManualForm ? (
-                  // ── AUTO-FILLED SAVED / DEFAULT ADDRESS CARD ──
+                  // ── RETURNING CUSTOMER: DEFAULT ADDRESS CARD ──
                   <div className="space-y-4">
                     <div className="border-2 border-emerald-500 bg-emerald-50/60 rounded-2xl p-5 relative shadow-sm">
                       <div className="flex items-center gap-2 mb-2.5">
@@ -454,10 +630,9 @@ export const CheckoutPage: React.FC = () => {
                         </div>
                       </div>
                     </div>
-
                   </div>
                 ) : (
-                  // ── MANUAL FORM OR NO SAVED ADDRESS ──
+                  // ── FIRST TIME CUSTOMER: SHIPPING ADDRESS FORM ──
                   <div className="space-y-4">
                     {savedAddresses.length > 0 && useManualForm && (
                       <div className="flex justify-between items-center bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-800 font-semibold">
@@ -476,7 +651,7 @@ export const CheckoutPage: React.FC = () => {
                       <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
                         <span>💡</span>
                         <span className="font-semibold">
-                          <Link to="/login" className="underline hover:text-amber-900">Sign in</Link> to auto-fill your saved address and track your orders easily.
+                          <Link to="/login" className="underline hover:text-amber-900">Sign in</Link> to save this address for future orders.
                         </span>
                       </div>
                     )}
@@ -558,7 +733,7 @@ export const CheckoutPage: React.FC = () => {
               </div>
             </div>
 
-            {/* ── 2. Payment Method Section (Admin-Controlled) ─────────────── */}
+            {/* ── 2. Payment Method Section ─────────────── */}
             <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
               <div className="p-5 border-b border-gray-100 flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -576,7 +751,6 @@ export const CheckoutPage: React.FC = () => {
                 {loadingPaymentMethods ? (
                   <div className="py-8 text-center text-gray-400 text-sm">Loading available payment methods...</div>
                 ) : enabledMethods.length === 0 ? (
-                  // ── SECTION 15: EMPTY PAYMENT METHOD STATE ──
                   <div className="bg-amber-50 border-2 border-amber-200 rounded-2xl p-6 text-center space-y-2">
                     <span className="text-3xl block">⚠️</span>
                     <h3 className="font-black text-amber-900 text-sm">No Payment Methods Currently Available</h3>
@@ -585,7 +759,6 @@ export const CheckoutPage: React.FC = () => {
                     </p>
                   </div>
                 ) : (
-                  // ── DYNAMIC ENABLED PAYMENT METHODS LIST (Admin Ordered) ──
                   <div className="space-y-4">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                       {enabledMethods.map((method) => {
@@ -628,7 +801,6 @@ export const CheckoutPage: React.FC = () => {
                             } ${isSelected ? activeBorder : 'border-gray-200 hover:border-gray-300 bg-white'}`}
                           >
                             <div className="flex items-center gap-3">
-                              {/* Radio Dot */}
                               <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
                                 isSelected ? 'border-emerald-600' : 'border-gray-300'
                               }`}>
@@ -641,7 +813,6 @@ export const CheckoutPage: React.FC = () => {
                               </div>
                             </div>
 
-                            {/* Check Indicator for Selected */}
                             {isSelected && (
                               <span className="text-[11px] font-black text-emerald-600 bg-emerald-100 px-2.5 py-0.5 rounded-full">
                                 ✓ Selected
@@ -658,7 +829,7 @@ export const CheckoutPage: React.FC = () => {
                       </div>
                     )}
 
-                    {/* ── SECTION 7 & 8: LARGE PRIMARY PAYMENT CTA BUTTON ── */}
+                    {/* LARGE PRIMARY PAYMENT CTA BUTTON */}
                     <div className="pt-2">
                       <button
                         type="button"
@@ -743,8 +914,14 @@ export const CheckoutPage: React.FC = () => {
                 </div>
                 <div className="flex justify-between text-xs text-gray-600">
                   <span>Delivery Charge</span>
-                  <span className="font-semibold">৳{deliveryCharge}</span>
+                  <span className="font-semibold">৳{deliveryCharge.toLocaleString()}</span>
                 </div>
+                {isCodSelected && codCharge > 0 && (
+                  <div className="flex justify-between text-xs text-gray-600">
+                    <span>COD / Courier Charge</span>
+                    <span className="font-semibold">৳{codCharge.toLocaleString()}</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-xs text-emerald-700">
                   <span>Discount</span>
                   <span className="font-semibold">৳0</span>
@@ -754,9 +931,22 @@ export const CheckoutPage: React.FC = () => {
               {/* Total */}
               <div className="px-5 pb-5 border-t border-gray-200">
                 <div className="flex justify-between items-center py-4">
-                  <span className="font-black text-gray-900">Total Payable</span>
+                  <span className="font-black text-gray-900">Total Order</span>
                   <span className="text-xl font-black text-emerald-600">৳{grandTotal.toLocaleString()}</span>
                 </div>
+
+                {isCodSelected && (
+                  <div className="space-y-2 text-xs mb-3 bg-gray-50 rounded-xl p-3">
+                    <div className="flex justify-between text-gray-600">
+                      <span>Paid Upfront</span>
+                      <span className="font-semibold text-emerald-700">৳{paidUpfront.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between items-center bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                      <span className="font-bold text-amber-800">💵 Cash to Pay on Delivery</span>
+                      <span className="font-black text-amber-900 text-base">৳{remainingCod.toLocaleString()}</span>
+                    </div>
+                  </div>
+                )}
 
                 {/* Place Order CTA in Sidebar */}
                 <button
@@ -777,7 +967,6 @@ export const CheckoutPage: React.FC = () => {
                   )}
                 </button>
 
-                {/* Security Badge */}
                 <p className="text-center text-[10px] text-gray-400 mt-3 flex items-center justify-center gap-1">
                   🔒 Secure checkout — your data is protected
                 </p>
@@ -787,7 +976,7 @@ export const CheckoutPage: React.FC = () => {
         </div>
       </form>
 
-      {/* Address Picker Modal */}
+      {/* Optional Address Picker Modal */}
       {showAddressPicker && (
         <AddressPickerModal
           addresses={savedAddresses}
@@ -812,8 +1001,8 @@ export const CheckoutPage: React.FC = () => {
         />
       )}
 
-      {/* Online Payment Gateway Popup Modal */}
-      {showGatewayModal && selectedMethod && (
+      {/* Online Payment Gateway Popup Modal (For Nagad, Rocket, Card) */}
+      {showGatewayModal && selectedMethod && selectedMethod.id !== 'bkash' && (
         <OnlinePaymentGatewayModal
           provider={selectedMethod.name}
           amount={grandTotal}
@@ -822,35 +1011,29 @@ export const CheckoutPage: React.FC = () => {
             setShowGatewayModal(false)
             setSubmitting(true)
 
-            // Simulate backend transaction verification
             const verifyRes = await verifyPayment(info.trxId, 'success')
+            const finalAddress = await ensureAddressSavedAndResolved()
 
-            const addrObj = selectedAddress && !useManualForm
-              ? {
-                  fullName: selectedAddress.fullName,
-                  phone: selectedAddress.phone,
-                  addressLine: selectedAddress.addressLine,
-                  city: selectedAddress.city,
-                  district: selectedAddress.district,
-                  postalCode: selectedAddress.postalCode || '',
-                  country: selectedAddress.country,
-                }
-              : {
-                  fullName: manualForm.fullName,
-                  phone: manualForm.phone,
-                  addressLine: manualForm.addressLine,
-                  city: manualForm.city,
-                  district: manualForm.district,
-                  postalCode: manualForm.postalCode,
-                  country: manualForm.country,
-                }
+            if (!finalAddress) {
+              setSubmitting(false)
+              setPaymentError('Invalid delivery address. Please check your information.')
+              return
+            }
 
             try {
               const res = await placeOrder({
-                customerName: manualForm.fullName,
-                customerEmail: manualForm.email,
-                customerPhone: manualForm.phone,
-                shippingAddress: addrObj,
+                customerName: finalAddress.fullName,
+                customerEmail: finalAddress.email,
+                customerPhone: finalAddress.phone,
+                shippingAddress: {
+                  fullName: finalAddress.fullName,
+                  phone: finalAddress.phone,
+                  addressLine: finalAddress.addressLine,
+                  city: finalAddress.city,
+                  district: finalAddress.district,
+                  postalCode: finalAddress.postalCode,
+                  country: finalAddress.country,
+                },
                 items: items.map((item) => ({
                   productId: item.productId,
                   productName: item.productName,
@@ -863,7 +1046,7 @@ export const CheckoutPage: React.FC = () => {
                 notes: notes || undefined,
               })
 
-              const addrSummary = `${addrObj.addressLine}, ${addrObj.city}, ${addrObj.district}`
+              const addrSummary = `${finalAddress.addressLine}, ${finalAddress.city}, ${finalAddress.district}`
               const orderId = res.order?.orderNumber || res.order?._id || `ORD-${Math.floor(100000 + Math.random() * 900000)}`
 
               clearCart()

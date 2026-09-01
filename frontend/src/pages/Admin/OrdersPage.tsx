@@ -18,6 +18,7 @@ const ORDER_STATUS_OPTIONS = [
   { value: 'approved', label: 'Approved' },
   { value: 'processing', label: 'Processing' },
   { value: 'shipped', label: 'Shipped' },
+  { value: 'out_for_delivery', label: 'Out for Delivery' },
   { value: 'delivered', label: 'Delivered' },
   { value: 'cancelled', label: 'Cancelled' },
   { value: 'rejected', label: 'Rejected' },
@@ -27,6 +28,7 @@ const ORDER_STATUS_OPTIONS = [
 const PAYMENT_STATUS_OPTIONS = [
   { value: '', label: 'All Payment' },
   { value: 'unpaid', label: 'Unpaid' },
+  { value: 'partially_paid', label: 'Partially Paid' },
   { value: 'pending', label: 'Pending' },
   { value: 'paid', label: 'Paid' },
   { value: 'failed', label: 'Failed' },
@@ -40,6 +42,7 @@ const STATUS_BADGE: Record<string, { variant: 'default' | 'destructive' | 'secon
   approved: { variant: 'accent', label: 'Approved' },
   processing: { variant: 'default', label: 'Processing' },
   shipped: { variant: 'default', label: 'Shipped' },
+  out_for_delivery: { variant: 'default', label: 'Out for Delivery' },
   delivered: { variant: 'default', label: 'Delivered' },
   cancelled: { variant: 'destructive', label: 'Cancelled' },
   rejected: { variant: 'destructive', label: 'Rejected' },
@@ -48,6 +51,7 @@ const STATUS_BADGE: Record<string, { variant: 'default' | 'destructive' | 'secon
 
 const PAYMENT_BADGE: Record<string, { variant: 'default' | 'destructive' | 'secondary' | 'outline' | 'accent'; label: string }> = {
   unpaid: { variant: 'outline', label: 'Unpaid' },
+  partially_paid: { variant: 'secondary', label: 'Partially Paid' },
   pending: { variant: 'secondary', label: 'Pending' },
   processing: { variant: 'secondary', label: 'Processing' },
   paid: { variant: 'accent', label: 'Paid' },
@@ -422,7 +426,7 @@ export const AdminOrdersPage: React.FC = () => {
           onClose={() => setDrawerOrder(null)}
           onApprove={(id) => { setShowApproveConfirm(id); setDrawerOrder(null) }}
           onReject={(id) => { setShowRejectModal(id); setDrawerOrder(null) }}
-          onStatusChange={(id, status) => handleStatusUpdate(id, status)}
+          onRefresh={fetchOrders}
         />
       )}
     </div>

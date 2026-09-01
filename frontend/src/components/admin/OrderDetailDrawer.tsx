@@ -1,7 +1,14 @@
 import React, { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/Button'
 import { Select } from '@/components/ui/Select'
-import { adminGetOrderById } from '@/services/orderService'
+import { OrderTimeline } from '@/components/ui/OrderTimeline'
+import { PaymentSummary } from '@/components/ui/PaymentSummary'
+import {
+  adminGetOrderById,
+  adminUpdateOrderStatus,
+  adminMarkOrderPaid,
+} from '@/services/orderService'
+import { getStatusLabel, getAvailableTransitions } from '@/services/orderStatus'
 import type { Order, OrderActivity } from '@/types'
 
 interface OrderDetailDrawerProps {
@@ -9,7 +16,7 @@ interface OrderDetailDrawerProps {
   onClose: () => void
   onApprove: (id: string) => void
   onReject: (id: string) => void
-  onStatusChange: (id: string, status: string) => void
+  onRefresh?: () => void
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -18,30 +25,11 @@ const STATUS_COLORS: Record<string, string> = {
   confirmed: 'bg-blue-100 text-blue-800 border-blue-200',
   processing: 'bg-blue-100 text-blue-800 border-blue-200',
   shipped: 'bg-indigo-100 text-indigo-800 border-indigo-200',
+  out_for_delivery: 'bg-cyan-100 text-cyan-800 border-cyan-200',
   delivered: 'bg-emerald-100 text-emerald-800 border-emerald-200',
   cancelled: 'bg-red-100 text-red-800 border-red-200',
   rejected: 'bg-red-100 text-red-800 border-red-200',
   returned: 'bg-gray-100 text-gray-800 border-gray-200',
-}
-
-const TIMELINE_STEPS: { key: string; label: string }[] = [
-  { key: 'pending', label: 'Order Placed' },
-  { key: 'approved', label: 'Order Approved' },
-  { key: 'processing', label: 'Processing' },
-  { key: 'shipped', label: 'Shipped' },
-  { key: 'delivered', label: 'Delivered' },
-]
-
-const STATUS_ORDER: Record<string, number> = {
-  pending: 0,
-  confirmed: 1,
-  approved: 1,
-  processing: 2,
-  shipped: 3,
-  delivered: 4,
-  cancelled: -1,
-  rejected: -1,
-  returned: -1,
 }
 
 export const OrderDetailDrawer: React.FC<OrderDetailDrawerProps> = ({
@@ -49,16 +37,20 @@ export const OrderDetailDrawer: React.FC<OrderDetailDrawerProps> = ({
   onClose,
   onApprove,
   onReject,
-  onStatusChange,
+  onRefresh,
 }) => {
   const [order, setOrder] = useState<Order | null>(null)
   const [loading, setLoading] = useState(true)
+  const [selectedStatus, setSelectedStatus] = useState('')
+  const [updating, setUpdating] = useState(false)
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
   useEffect(() => {
     const load = async () => {
       try {
         const res = await adminGetOrderById(orderId)
         setOrder(res.order)
+        setSelectedStatus(res.order.status || '')
       } catch {
         onClose()
       } finally {
@@ -66,37 +58,52 @@ export const OrderDetailDrawer: React.FC<OrderDetailDrawerProps> = ({
       }
     }
     load()
-  }, [orderId])
+  }, [orderId, onClose])
 
-  const getTimelineStepState = (stepKey: string): 'completed' | 'current' | 'pending' => {
-    if (!order) return 'pending'
-    if (order.status === 'cancelled' || order.status === 'rejected') {
-      if (stepKey === 'pending') return 'completed'
-      if (STATUS_ORDER[order.status] !== undefined && STATUS_ORDER[stepKey] <= Math.abs(STATUS_ORDER[order.status])) {
-        return 'completed'
-      }
-      return 'pending'
-    }
-    const currentIdx = STATUS_ORDER[order.status] ?? -1
-    const stepIdx = STATUS_ORDER[stepKey] ?? -1
-    if (stepIdx < currentIdx) return 'completed'
-    if (stepIdx === currentIdx) return 'current'
-    return 'pending'
+  const showToast = (type: 'success' | 'error', message: string) => {
+    setToast({ type, message })
+    setTimeout(() => setToast(null), 3000)
   }
 
-  const getTransitionStatuses = (currentStatus: string): string[] => {
-    const transitions: Record<string, string[]> = {
-      pending: ['approved', 'cancelled', 'rejected'],
-      confirmed: ['processing', 'cancelled'],
-      approved: ['processing', 'cancelled'],
-      processing: ['shipped', 'cancelled'],
-      shipped: ['delivered'],
-      delivered: [],
-      cancelled: [],
-      rejected: [],
-      returned: [],
+  const handleUpdateStatus = async () => {
+    if (!order || !selectedStatus || selectedStatus === order.status) return
+    setUpdating(true)
+    try {
+      const res = await adminUpdateOrderStatus(order.id, selectedStatus)
+      showToast('success', res.message || `Status updated to '${selectedStatus}'.`)
+      const nextStatus = res.order?.status || selectedStatus
+      setSelectedStatus(nextStatus)
+      setOrder(res.order)
+      if (onRefresh) onRefresh()
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to update status.'
+      showToast('error', msg)
+      try {
+        const fresh = await adminGetOrderById(order.id)
+        setOrder(fresh.order)
+        setSelectedStatus(fresh.order?.status || '')
+      } catch {
+        /* keep current state if refetch fails */
+      }
+      if (onRefresh) onRefresh()
+    } finally {
+      setUpdating(false)
     }
-    return transitions[currentStatus] || []
+  }
+
+  const handleMarkPaid = async () => {
+    if (!order) return
+    setUpdating(true)
+    try {
+      const res = await adminMarkOrderPaid(order.id)
+      showToast('success', 'Order marked as paid.')
+      setOrder(res.order)
+      if (onRefresh) onRefresh()
+    } catch (err: any) {
+      showToast('error', err.message || 'Failed to mark order as paid.')
+    } finally {
+      setUpdating(false)
+    }
   }
 
   if (loading) {
@@ -113,6 +120,19 @@ export const OrderDetailDrawer: React.FC<OrderDetailDrawerProps> = ({
 
   const addr = order.shippingAddress
   const isRejected = order.status === 'rejected'
+  const availableTransitions = getAvailableTransitions(order.status)
+  const canChangeStatus = availableTransitions.length > 0
+  const items = Array.isArray(order.items) ? order.items : []
+  const orderDisplayId = order.orderNumber || (order.id ? order.id.slice(-8) : 'N/A')
+  const orderDisplayDate = order.orderDate || (order.createdAt ? new Date(order.createdAt).toLocaleDateString() : '')
+  const payment = order.payment || {
+    method: order.paymentMethod || 'cod',
+    status: order.paymentStatus || 'unpaid',
+    paidAmount: order.paymentStatus === 'paid' ? order.total : 0,
+    remainingAmount: order.paymentStatus === 'paid' ? 0 : order.total,
+  }
+  const isCod = (payment.method || order.paymentMethod || '').toLowerCase() === 'cod'
+  const isPaid = payment.status === 'paid'
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex justify-end" onClick={onClose}>
@@ -124,10 +144,10 @@ export const OrderDetailDrawer: React.FC<OrderDetailDrawerProps> = ({
         <div className="sticky top-0 bg-white border-b border-gray-200 p-4 flex justify-between items-center z-10">
           <div>
             <h2 className="text-base font-bold text-gray-900">
-              Order #{order.orderNumber || order.id.slice(-8)}
+              Order #{orderDisplayId}
             </h2>
             <p className="text-[11px] text-gray-400">
-              Placed on {order.orderDate || new Date(order.createdAt).toLocaleDateString()}
+              Placed on {orderDisplayDate}
             </p>
           </div>
           <button onClick={onClose} className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-200">
@@ -135,11 +155,19 @@ export const OrderDetailDrawer: React.FC<OrderDetailDrawerProps> = ({
           </button>
         </div>
 
+        {toast && (
+          <div className={`px-4 py-2 text-xs font-bold text-white text-center ${
+            toast.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'
+          }`}>
+            {toast.type === 'success' ? '✓' : '✕'} {toast.message}
+          </div>
+        )}
+
         <div className="p-4 space-y-5">
           {/* Status & Actions */}
           <div className="flex items-center justify-between">
             <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-bold border ${STATUS_COLORS[order.status] || 'bg-gray-100'}`}>
-              {order.status.charAt(0).toUpperCase() + order.status.slice(1)}
+              {getStatusLabel(order.status)}
             </span>
             <div className="flex gap-2">
               {order.status === 'pending' && (
@@ -169,54 +197,51 @@ export const OrderDetailDrawer: React.FC<OrderDetailDrawerProps> = ({
           {/* Status Timeline */}
           <div className="bg-gray-50 rounded-xl p-4">
             <h3 className="text-xs font-bold text-gray-700 mb-3 uppercase tracking-wider">Order Timeline</h3>
-            <div className="space-y-0">
-              {TIMELINE_STEPS.map((step, idx) => {
-                const state = getTimelineStepState(step.key)
-                const isLast = idx === TIMELINE_STEPS.length - 1
-                return (
-                  <div key={step.key} className="flex items-start gap-3">
-                    <div className="flex flex-col items-center">
-                      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 ${
-                        state === 'completed' ? 'bg-emerald-500 text-white' :
-                        state === 'current' ? 'bg-emerald-600 text-white ring-2 ring-emerald-200 animate-pulse' :
-                        'bg-gray-200 text-gray-400'
-                      }`}>
-                        {state === 'completed' ? '✓' : state === 'current' ? '●' : '○'}
-                      </div>
-                      {!isLast && (
-                        <div className={`w-0.5 h-6 ${state === 'completed' ? 'bg-emerald-400' : 'bg-gray-200'}`} />
-                      )}
-                    </div>
-                    <div className="pb-4">
-                      <p className={`text-xs font-semibold ${state === 'completed' || state === 'current' ? 'text-gray-900' : 'text-gray-400'}`}>
-                        {step.label}
-                      </p>
-                      {state === 'current' && (
-                        <p className="text-[10px] text-emerald-600 font-medium">Current stage</p>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-
-            {/* Status change for approved/processing orders */}
-            {['approved', 'processing', 'shipped'].includes(order.status) && (
-              <div className="mt-4 pt-3 border-t border-gray-200">
-                <Select
-                  label="Update Status"
-                  value={order.status}
-                  options={getTransitionStatuses(order.status).map((s) => ({
-                    value: s,
-                    label: s.charAt(0).toUpperCase() + s.slice(1),
-                  }))}
-                  onChange={(val) => {
-                    if (val) onStatusChange(order.id, val)
-                  }}
-                />
-              </div>
-            )}
+            <OrderTimeline status={order.status} />
           </div>
+
+          {/* ── Change Status (Requirement 4, 13) ─────────────── */}
+          {canChangeStatus && (
+            <div className="bg-gray-50 rounded-xl p-4 space-y-3">
+              <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wider">Change Status</h3>
+              <p className="text-[11px] text-gray-500">
+                Current: <span className="font-bold text-gray-800">{getStatusLabel(order.status)}</span>
+              </p>
+              <Select
+                label="Select New Status"
+                value={selectedStatus}
+                options={[
+                  { value: order.status, label: `${getStatusLabel(order.status)} (current)` },
+                  ...availableTransitions.map((s) => ({ value: s, label: getStatusLabel(s) })),
+                ]}
+                onChange={(val) => setSelectedStatus(val)}
+              />
+              <Button
+                variant="primary"
+                size="sm"
+                className="w-full"
+                disabled={updating || selectedStatus === order.status}
+                onClick={handleUpdateStatus}
+              >
+                {updating ? 'Updating...' : 'Update Status'}
+              </Button>
+            </div>
+          )}
+
+          {/* ── Mark as Paid (COD) ────────────────────────────── */}
+          {isCod && !isPaid && (
+            <div className="bg-gray-50 rounded-xl p-4 space-y-2">
+              <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wider">Payment Collection</h3>
+              <p className="text-[11px] text-gray-500">
+                When the courier/admin collects the remaining{' '}
+                <span className="font-bold text-amber-800">৳{(payment.remainingAmount || 0).toLocaleString()}</span>,
+                mark the order as paid.
+              </p>
+              <Button variant="primary" size="sm" className="w-full" disabled={updating} onClick={handleMarkPaid}>
+                {updating ? 'Saving...' : '✓ Mark as Paid (Collected)'}
+              </Button>
+            </div>
+          )}
 
           {/* Order Information */}
           <div className="bg-gray-50 rounded-xl p-4">
@@ -224,11 +249,11 @@ export const OrderDetailDrawer: React.FC<OrderDetailDrawerProps> = ({
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div>
                 <p className="text-gray-400">Order ID</p>
-                <p className="font-mono font-bold text-gray-900">{order.orderNumber || order.id.slice(-8)}</p>
+                <p className="font-mono font-bold text-gray-900">{orderDisplayId}</p>
               </div>
               <div>
                 <p className="text-gray-400">Order Date</p>
-                <p className="font-semibold text-gray-900">{order.orderDate || new Date(order.createdAt).toLocaleDateString()}</p>
+                <p className="font-semibold text-gray-900">{orderDisplayDate}</p>
               </div>
               <div>
                 <p className="text-gray-400">Payment Method</p>
@@ -237,22 +262,20 @@ export const OrderDetailDrawer: React.FC<OrderDetailDrawerProps> = ({
               <div>
                 <p className="text-gray-400">Payment Status</p>
                 <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                  order.paymentStatus === 'paid' ? 'bg-emerald-100 text-emerald-800' :
-                  order.paymentStatus === 'unpaid' ? 'bg-amber-100 text-amber-800' :
-                  order.paymentStatus === 'failed' ? 'bg-red-100 text-red-800' :
+                  payment.status === 'paid' ? 'bg-emerald-100 text-emerald-800' :
+                  payment.status === 'partially_paid' ? 'bg-amber-100 text-amber-800' :
+                  payment.status === 'unpaid' ? 'bg-gray-100 text-gray-700' :
+                  payment.status === 'failed' ? 'bg-red-100 text-red-800' :
                   'bg-gray-100 text-gray-800'
                 }`}>
-                  {order.paymentStatus === 'paid' ? '✓ Paid' : order.paymentStatus === 'unpaid' ? '⏳ Unpaid' : order.paymentStatus}
+                  {payment.status === 'paid' ? '✓ Paid' : payment.status === 'partially_paid' ? 'Partially Paid' : payment.status}
                 </span>
               </div>
-              {order.trxId && (
-                <div className="col-span-2">
-                  <p className="text-gray-400">Transaction ID</p>
-                  <p className="font-mono font-bold text-emerald-700">{order.trxId}</p>
-                </div>
-              )}
             </div>
           </div>
+
+          {/* Payment Summary */}
+          <PaymentSummary order={order} />
 
           {/* Customer Information */}
           <div className="bg-gray-50 rounded-xl p-4">
@@ -283,7 +306,7 @@ export const OrderDetailDrawer: React.FC<OrderDetailDrawerProps> = ({
           <div className="bg-gray-50 rounded-xl p-4">
             <h3 className="text-xs font-bold text-gray-700 mb-3 uppercase tracking-wider">Items</h3>
             <div className="divide-y divide-gray-200">
-              {order.items.map((item, idx) => (
+              {items.map((item, idx) => (
                 <div key={idx} className="py-3 flex items-center gap-3 first:pt-0 last:pb-0">
                   {item.productImage && (
                     <img src={item.productImage} alt="" className="w-12 h-12 rounded-lg object-cover border border-gray-200 flex-shrink-0" />
@@ -300,30 +323,26 @@ export const OrderDetailDrawer: React.FC<OrderDetailDrawerProps> = ({
             </div>
           </div>
 
-          {/* Order Summary */}
-          <div className="bg-gray-50 rounded-xl p-4">
-            <h3 className="text-xs font-bold text-gray-700 mb-3 uppercase tracking-wider">Summary</h3>
-            <div className="space-y-2 text-xs">
-              <div className="flex justify-between text-gray-600">
-                <span>Subtotal</span>
-                <span className="font-semibold">৳{order.subtotal.toLocaleString()}</span>
-              </div>
-              <div className="flex justify-between text-gray-600">
-                <span>Delivery</span>
-                <span className="font-semibold">৳{(order.deliveryFee || order.deliveryCharge || 0).toLocaleString()}</span>
-              </div>
-              {order.discount > 0 && (
-                <div className="flex justify-between text-emerald-700">
-                  <span>Discount</span>
-                  <span className="font-semibold">-৳{order.discount.toLocaleString()}</span>
-                </div>
-              )}
-              <div className="flex justify-between font-black text-sm text-gray-900 pt-2 border-t border-gray-200">
-                <span>Total</span>
-                <span className="text-emerald-600">৳{order.total.toLocaleString()}</span>
+          {/* Status History */}
+          {order.statusHistory && order.statusHistory.length > 0 && (
+            <div className="bg-gray-50 rounded-xl p-4">
+              <h3 className="text-xs font-bold text-gray-700 mb-3 uppercase tracking-wider">Status History</h3>
+              <div className="space-y-2">
+                {[...order.statusHistory].reverse().map((h, idx) => (
+                  <div key={idx} className="flex items-start gap-2 text-xs">
+                    <span className="text-gray-400 mt-0.5 flex-shrink-0">
+                      {new Date(h.changedAt).toLocaleString()}
+                    </span>
+                    <div>
+                      <p className="font-semibold text-gray-900 capitalize">{h.status.replace(/_/g, ' ')}</p>
+                      <p className="text-gray-500">by {h.changedByName || h.changedByRole || 'system'}</p>
+                      {h.note && <p className="text-gray-400 italic">"{h.note}"</p>}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
-          </div>
+          )}
 
           {/* Activity Log */}
           {order.activity && order.activity.length > 0 && (

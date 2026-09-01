@@ -6,6 +6,7 @@ const {
   adminApproveOrder,
   adminRejectOrder,
   adminUpdateOrderStatus,
+  adminMarkOrderPaid,
   adminGetOrderStats,
 } = require('../controllers/adminOrderController')
 const { protect } = require('../middleware/authMiddleware')
@@ -24,5 +25,6 @@ router.get('/orders/:id', adminGetOrderById)
 router.patch('/orders/:id/approve', adminApproveOrder)
 router.patch('/orders/:id/reject', adminRejectOrder)
 router.patch('/orders/:id/status', adminUpdateOrderStatus)
+router.patch('/orders/:id/payment', adminMarkOrderPaid)
 
 module.exports = router

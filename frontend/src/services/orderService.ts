@@ -1,5 +1,5 @@
 import { apiClient } from './apiClient'
-import type { Order } from '@/types'
+import type { Order, ShippingCodSettings } from '@/types'
 
 export interface AdminOrdersResponse {
   success: boolean
@@ -19,6 +19,7 @@ export interface AdminOrderStatsResponse {
     confirmed: number
     processing: number
     shipped: number
+    outForDelivery: number
     delivered: number
     cancelled: number
     rejected: number
@@ -69,8 +70,24 @@ export async function adminUpdateOrderStatus(id: string, status: string) {
   return apiClient.patch(`/admin/orders/${id}/status`, { status })
 }
 
+export async function adminMarkOrderPaid(id: string) {
+  return apiClient.patch(`/admin/orders/${id}/payment`)
+}
+
 export async function adminGetOrderStats(): Promise<AdminOrderStatsResponse> {
   return apiClient.get('/admin/orders/stats')
+}
+
+// ── Shipping & COD settings ──────────────────────────────────────
+export async function getShippingCodSettings(): Promise<ShippingCodSettings> {
+  const res = await apiClient.get<{ success: boolean; settings: ShippingCodSettings }>('/settings/shipping-cod')
+  return res.settings
+}
+
+export async function updateShippingCodSettings(
+  data: Partial<ShippingCodSettings>
+): Promise<{ success: boolean; message: string; settings: ShippingCodSettings }> {
+  return apiClient.patch('/settings/shipping-cod', data)
 }
 
 export async function customerGetMyOrders() {

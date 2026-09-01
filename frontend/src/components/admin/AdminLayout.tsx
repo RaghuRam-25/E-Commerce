@@ -19,6 +19,7 @@ export const AdminLayout: React.FC = () => {
     { to: '/admin/campaigns', label: 'Email Campaigns', icon: '📨' },
     { to: '/admin/social', label: 'Social Media Settings', icon: '🌐' },
     { to: '/admin/payment-methods', label: 'Payment Methods', icon: '💳' },
+    { to: '/admin/shipping-cod', label: 'Shipping & COD', icon: '🚚' },
     ...(isSuperAdmin
       ? [{ to: '/admin/admin-management', label: 'Admin Management', icon: '🛡️' }]
       : []),

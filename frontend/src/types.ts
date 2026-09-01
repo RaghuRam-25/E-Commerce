@@ -34,6 +34,13 @@ export interface RegisterFormData {
   password: string
 }
 
+export interface ProductImage {
+  url: string
+  publicId: string
+  order: number
+  isPrimary: boolean
+}
+
 export interface Product {
   id: string
   name: string
@@ -44,7 +51,8 @@ export interface Product {
   discount: number
   stock: number
   sku: string
-  images: string[]
+  images: (ProductImage | string)[]
+  primaryImage?: string
   rating: number
   isFeatured: boolean
   isActive: boolean
@@ -95,12 +103,15 @@ export interface Order {
   discount: number
   deliveryCharge: number
   deliveryFee?: number
+  codCharge?: number
   paymentMethod: string
   paymentMethodName?: string
-  paymentStatus: 'unpaid' | 'pending' | 'processing' | 'paid' | 'failed' | 'cancelled' | 'refunded'
+  paymentStatus: 'unpaid' | 'partially_paid' | 'pending' | 'processing' | 'paid' | 'failed' | 'cancelled' | 'refunded'
+  payment?: OrderPayment
   paymentId?: string
   trxId?: string
   status: OrderStatus
+  statusHistory?: OrderStatusHistory[]
   notes?: string
   orderDate: string
   approvedBy?: string
@@ -113,7 +124,25 @@ export interface Order {
   updatedAt: string
 }
 
-export type OrderStatus = 'pending' | 'confirmed' | 'approved' | 'processing' | 'shipped' | 'delivered' | 'cancelled' | 'rejected' | 'returned'
+export interface OrderPayment {
+  method: string
+  status: 'unpaid' | 'partially_paid' | 'pending' | 'processing' | 'paid' | 'failed' | 'cancelled' | 'refunded'
+  paidAmount: number
+  remainingAmount: number
+  transactionId?: string
+  paidAt?: string
+}
+
+export interface OrderStatusHistory {
+  status: string
+  changedBy?: string
+  changedByRole?: string
+  changedByName?: string
+  changedAt: string
+  note?: string
+}
+
+export type OrderStatus = 'pending' | 'confirmed' | 'approved' | 'processing' | 'shipped' | 'out_for_delivery' | 'delivered' | 'cancelled' | 'rejected' | 'returned'
 
 export interface OrderActivity {
   action: string
@@ -182,6 +211,14 @@ export interface ShippingInfo {
 export type PaymentMethodType = 'cod' | 'mobile_banking' | 'card'
 
 export type PaymentStatus = 'unpaid' | 'pending' | 'processing' | 'paid' | 'failed' | 'cancelled' | 'refunded'
+
+export interface ShippingCodSettings {
+  codEnabled: boolean
+  codCharge: number
+  minimumCodCharge: number
+  requireUpfrontCodCharge: boolean
+  shippingCharge: number
+}
 
 export interface PaymentMethod {
   id: string

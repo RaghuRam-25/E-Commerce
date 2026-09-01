@@ -1,5 +1,13 @@
 const mongoose = require('mongoose')
 
+const reviewImageSchema = new mongoose.Schema(
+  {
+    url: { type: String, required: true },
+    publicId: { type: String, required: true },
+  },
+  { _id: false }
+)
+
 const reviewSchema = new mongoose.Schema(
   {
     customerId: {
@@ -22,12 +30,19 @@ const reviewSchema = new mongoose.Schema(
       trim: true,
       lowercase: true,
     },
+    title: {
+      type: String,
+      trim: true,
+      maxlength: [100, 'Title cannot exceed 100 characters'],
+      default: '',
+    },
     review: {
       type: String,
-      required: [true, 'Review text is required'],
-      minlength: [10, 'Review must be at least 10 characters long'],
-      maxlength: [500, 'Review cannot exceed 500 characters'],
+      required: false,
+      minlength: [0, 'Review must be at least 0 characters long'],
+      maxlength: [1000, 'Review cannot exceed 1000 characters'],
       trim: true,
+      default: '',
     },
     rating: {
       type: Number,
@@ -42,6 +57,15 @@ const reviewSchema = new mongoose.Schema(
     avatarUrl: {
       type: String,
       default: '',
+    },
+    // Review photos (stored as Cloudinary URLs — not binary)
+    images: {
+      type: [reviewImageSchema],
+      default: [],
+      validate: {
+        validator: (arr) => arr.length <= 5,
+        message: 'A review can have a maximum of 5 photos.',
+      },
     },
     status: {
       type: String,
@@ -66,6 +90,18 @@ const reviewSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Helpful votes
+    helpfulCount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    helpfulVoters: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+    ],
   },
   {
     timestamps: true,

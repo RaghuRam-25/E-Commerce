@@ -15,6 +15,8 @@ const reviewRoutes = require('./routes/reviewRoutes')
 const uploadRoutes = require('./routes/uploadRoutes')
 const addressRoutes = require('./routes/addressRoutes')
 const adminRoutes = require('./routes/adminRoutes')
+const bkashRoutes = require('./routes/bkashRoutes')
+const settingsRoutes = require('./routes/settingsRoutes')
 
 // Connect to MongoDB
 connectDB()
@@ -53,7 +55,8 @@ app.use('/api/reviews', reviewRoutes)
 app.use('/api/upload', uploadRoutes)
 app.use('/api/addresses', addressRoutes)
 app.use('/api/admin', adminRoutes)
-
+app.use('/api/bkash', bkashRoutes)
+app.use('/api/settings', settingsRoutes)
 
 // ── 404 Handler ─────────────────────────────────────────────────
 app.use((req, res) => {

@@ -1,5 +1,6 @@
 const Cart = require('../models/Cart')
 const Product = require('../models/Product')
+const { getProductImageUrl } = require('../utils/productImage')
 
 // @desc    Get current user's cart
 // @route   GET /api/cart
@@ -54,7 +55,7 @@ const addToCart = async (req, res) => {
       cart.items.push({
         product: product._id,
         productName: product.name,
-        productImage: product.images?.[0] || '',
+        productImage: getProductImageUrl(product.images) || '',
         price: effectivePrice,
         quantity: Number(quantity),
       })

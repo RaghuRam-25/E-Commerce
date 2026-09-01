@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
 import type { CartItem, CartState, Product } from '../types'
+import { getProductPrimaryImage } from '../services/productImages'
 
 const CartContext = createContext<CartState | undefined>(undefined)
 
@@ -59,7 +60,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode; initialItems?: 
           id: crypto.randomUUID(),
           productId: product.id,
           productName: product.name,
-          productImage: product.images?.[0] || '/placeholder-product.svg',
+          productImage: getProductPrimaryImage(product) || '/placeholder-product.svg',
           price: product.price,
           discount: product.discount || 0,
           quantity: 1,

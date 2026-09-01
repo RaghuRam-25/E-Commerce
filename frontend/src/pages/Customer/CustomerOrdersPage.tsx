@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
+import { OrderTimeline } from '@/components/ui/OrderTimeline'
 import { customerGetMyOrders } from '@/services/orderService'
+import { getStatusLabel } from '@/services/orderStatus'
 import type { Order } from '@/types'
 
 const STATUS_BADGE: Record<string, { variant: 'default' | 'destructive' | 'secondary' | 'outline' | 'accent'; label: string }> = {
@@ -11,6 +13,7 @@ const STATUS_BADGE: Record<string, { variant: 'default' | 'destructive' | 'secon
   approved: { variant: 'accent', label: 'Approved' },
   processing: { variant: 'default', label: 'Processing' },
   shipped: { variant: 'default', label: 'Shipped' },
+  out_for_delivery: { variant: 'default', label: 'Out for Delivery' },
   delivered: { variant: 'default', label: 'Delivered' },
   cancelled: { variant: 'destructive', label: 'Cancelled' },
   rejected: { variant: 'destructive', label: 'Rejected' },
@@ -19,6 +22,7 @@ const STATUS_BADGE: Record<string, { variant: 'default' | 'destructive' | 'secon
 
 const PAYMENT_BADGE: Record<string, { bg: string; label: string }> = {
   unpaid: { bg: 'bg-amber-100 text-amber-800', label: 'Unpaid' },
+  partially_paid: { bg: 'bg-amber-100 text-amber-800', label: 'Partially Paid' },
   pending: { bg: 'bg-gray-100 text-gray-800', label: 'Pending' },
   paid: { bg: 'bg-emerald-100 text-emerald-800', label: 'Paid' },
   failed: { bg: 'bg-red-100 text-red-800', label: 'Failed' },
@@ -31,6 +35,7 @@ export const CustomerOrdersPage: React.FC = () => {
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [error, setError] = useState<string | null>(null)
+  const [expandedOrder, setExpandedOrder] = useState<string | null>(null)
 
   useEffect(() => {
     const load = async () => {
@@ -56,6 +61,7 @@ export const CustomerOrdersPage: React.FC = () => {
     { key: 'approved', label: 'Approved' },
     { key: 'processing', label: 'Processing' },
     { key: 'shipped', label: 'Shipped' },
+    { key: 'out_for_delivery', label: 'Out for Delivery' },
     { key: 'delivered', label: 'Delivered' },
   ]
 
@@ -172,18 +178,70 @@ export const CustomerOrdersPage: React.FC = () => {
                   </div>
                 )}
 
-                {/* Footer */}
-                <div className="pt-3 border-t border-gray-100 flex justify-between items-center text-xs">
-                  <span className="text-gray-500">
-                    {order.shippingAddress
-                      ? `${order.shippingAddress.city}, ${order.shippingAddress.district}`
-                      : order.city || 'N/A'}
-                  </span>
-                  <div className="text-right">
-                    <span className="text-gray-400 block">Total</span>
-                    <span className="text-base font-black text-emerald-600">৳{order.total.toLocaleString()}</span>
-                  </div>
+                {/* Order Status Timeline */}
+                <div className="bg-gray-50 rounded-xl p-4">
+                  <h4 className="text-xs font-bold text-gray-700 mb-3 uppercase tracking-wider">Order Tracking</h4>
+                  <OrderTimeline status={order.status} />
                 </div>
+
+                {/* Payment details */}
+                {(() => {
+                  const payment = order.payment || {
+                    method: order.paymentMethod || 'cod',
+                    status: order.paymentStatus || 'unpaid',
+                    paidAmount: order.paymentStatus === 'paid' ? order.total : 0,
+                    remainingAmount: order.paymentStatus === 'paid' ? 0 : order.total,
+                  }
+                  const isCod = (payment.method || order.paymentMethod || '').toLowerCase() === 'cod'
+                  const remaining = payment.remainingAmount ?? (isCod ? order.total - (payment.paidAmount || 0) : 0)
+                  const paidAmount = payment.paidAmount || 0
+                  return (
+                    <div className="pt-3 border-t border-gray-100 space-y-2 text-xs">
+                      <div className="flex justify-between text-gray-600">
+                        <span>Order Total</span>
+                        <span className="font-bold text-emerald-600">৳{order.total.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between text-gray-600">
+                        <span>Paid {!isCod ? 'Online' : 'Upfront'}</span>
+                        <span className="font-semibold text-emerald-700">৳{paidAmount.toLocaleString()}</span>
+                      </div>
+                      {isCod && remaining > 0 && (
+                        <div className="flex justify-between items-center bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                          <span className="font-bold text-amber-800">💵 Cash to Pay on Delivery</span>
+                          <span className="font-black text-amber-900 text-base">৳{remaining.toLocaleString()}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between items-center pt-2 border-t border-gray-100">
+                        <span className="text-gray-500">
+                          {order.shippingAddress
+                            ? `${order.shippingAddress.city}, ${order.shippingAddress.district}`
+                            : order.city || 'N/A'}
+                        </span>
+                        <button
+                          onClick={() => setExpandedOrder(order.id === expandedOrder ? null : order.id)}
+                          className="text-[11px] font-bold text-emerald-600 hover:underline"
+                        >
+                          {expandedOrder === order.id ? 'Hide Details ▲' : `Status: ${getStatusLabel(order.status)} ▾`}
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })()}
+
+                {/* Status history */}
+                {expandedOrder === order.id && order.statusHistory && order.statusHistory.length > 0 && (
+                  <div className="bg-gray-50 rounded-xl p-4 text-xs">
+                    <h4 className="font-bold text-gray-700 mb-2 uppercase tracking-wider">Status History</h4>
+                    <div className="space-y-1.5">
+                      {[...order.statusHistory].reverse().map((h, idx) => (
+                        <div key={idx} className="flex justify-between text-gray-600">
+                          <span className="font-semibold capitalize">{h.status.replace(/_/g, ' ')}</span>
+                          <span className="text-gray-400">{new Date(h.changedAt).toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )
           })}

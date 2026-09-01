@@ -31,6 +31,7 @@ import { AdminSubscribersPage } from '@/pages/Admin/AdminSubscribersPage'
 import { AdminCampaignsPage } from '@/pages/Admin/AdminCampaignsPage'
 import { AdminReviewsPage } from '@/pages/Admin/AdminReviewsPage'
 import { AdminPaymentMethodsPage } from '@/pages/Admin/PaymentMethodsPage'
+import { AdminShippingCodSettingsPage } from '@/pages/Admin/AdminShippingCodSettingsPage'
 
 import { ProtectedRoute } from '@/routes/ProtectedRoute'
 
@@ -101,6 +102,7 @@ export const AppRoutes: React.FC = () => {
         <Route path="campaigns" element={<AdminCampaignsPage />} />
         <Route path="social" element={<AdminSocialPage />} />
         <Route path="payment-methods" element={<AdminPaymentMethodsPage />} />
+        <Route path="shipping-cod" element={<AdminShippingCodSettingsPage />} />
 
         {/* Super Admin ONLY Route */}
         <Route
